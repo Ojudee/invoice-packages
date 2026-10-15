@@ -101,6 +101,58 @@ export interface Invoice {
   // Metadata
   createdAt: string;
   updatedAt: string;
+
+  // Separate Packages Configuration in Invoice Studio
+  packagesConfig?: InvoicePackagesConfig;
+  activePrintFilter?: PackageSelectionMap;
+}
+
+export interface PackageSelectionMap {
+  architectural: boolean;
+  structural: boolean;
+  boq: boolean;
+  inspection: boolean;
+  addons: boolean;
+}
+
+export type PackageFilterPreset =
+  | 'all'
+  | 'architectural'
+  | 'structural'
+  | 'boq'
+  | 'inspection'
+  | 'addons'
+  | 'arch_structural'
+  | 'arch_boq'
+  | 'structural_boq'
+  | 'custom';
+
+export interface InvoicePackagesConfig {
+  architectural: {
+    enabled: boolean;
+    tier: PackageType;
+    rate: number;
+    area?: number;
+    notes?: string;
+  };
+  structural: {
+    enabled: boolean;
+    tier: PackageType;
+    rate: number;
+    area?: number;
+    notes?: string;
+  };
+  boq: {
+    enabled: boolean;
+    tier: PackageType;
+    fee: number;
+    notes?: string;
+  };
+  inspection: {
+    enabled: boolean;
+    fee: number;
+    notes?: string;
+  };
 }
 
 export interface PackageDefinition {
@@ -111,3 +163,4 @@ export interface PackageDefinition {
   description: string;
   features: string[];
 }
+

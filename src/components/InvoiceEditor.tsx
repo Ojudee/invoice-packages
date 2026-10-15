@@ -22,9 +22,34 @@ import {
   Check,
   ExternalLink,
   Edit3,
+  SlidersHorizontal,
 } from 'lucide-react';
-import { Invoice, FloorItem, AddonService, CurrencyCode, MeasurementUnit, InvoiceStatus, PackageType } from '../types';
-import { PACKAGES, BANK_PRESETS, ARCHITECTURAL_ADDONS_PRESETS, DEFAULT_TERMS, BOQ_PACKAGES } from '../data/constants';
+import {
+  Invoice,
+  FloorItem,
+  AddonService,
+  CurrencyCode,
+  MeasurementUnit,
+  InvoiceStatus,
+  PackageType,
+  PackageSelectionMap,
+  InvoicePackagesConfig,
+} from '../types';
+import {
+  PACKAGES,
+  STRUCTURAL_PACKAGES,
+  BOQ_PACKAGES,
+  SITE_INSPECTION_PACKAGE,
+  BANK_PRESETS,
+  ARCHITECTURAL_ADDONS_PRESETS,
+  DEFAULT_TERMS,
+  getBOQPackageFee,
+} from '../data/constants';
+import {
+  getInvoicePackagesConfig,
+  getPackageSummaries,
+  PACKAGE_PRESETS,
+} from '../utils/packageManager';
 import { usePackageServices, PackageCategory } from '../services/packageServicesStorage';
 import { ServicePackageEditorModal } from './ServicePackageEditorModal';
 import { calculateInvoice, formatCurrency } from '../utils/calculations';
@@ -36,7 +61,7 @@ interface InvoiceEditorProps {
   onSave?: () => void;
   onDownloadPDF?: () => void;
   onPrint?: () => void;
-  onPrintPreview?: () => void;
+  onPrintPreview?: (filter?: PackageSelectionMap) => void;
   saveStatusMessage?: string;
   onOpenArchitecturalPortal?: () => void;
   onOpenStructuralPortal?: () => void;
@@ -64,6 +89,39 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
   const { regularServices, premiumExtraServices } = usePackageServices('boq');
   const { regularServices: archReg, premiumAllServices: archPremAll } = usePackageServices('architectural');
   const calculations = calculateInvoice(invoice);
+
+  // Separate Packages Configuration & Summaries
+  const pkgConfig = getInvoicePackagesConfig(invoice);
+  const pkgSummaries = getPackageSummaries(invoice);
+
+  // Multi-package combination selector for printing
+  const [combineSelection, setCombineSelection] = useState<PackageSelectionMap>({
+    architectural: true,
+    structural: true,
+    boq: false,
+    inspection: false,
+    addons: false,
+  });
+
+  const updatePkgConfig = (updater: (prev: InvoicePackagesConfig) => InvoicePackagesConfig) => {
+    const updated = updater(pkgConfig);
+    onChange({
+      ...invoice,
+      packagesConfig: updated,
+      packageType: updated.architectural.tier,
+      packageRate: updated.architectural.rate,
+    });
+  };
+
+  const handleTogglePackageInCombine = (key: keyof PackageSelectionMap) => {
+    setCombineSelection((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const combineGrandTotal = (Object.keys(combineSelection) as (keyof PackageSelectionMap)[]).reduce(
+    (sum, k) => (combineSelection[k] ? sum + pkgSummaries.packages[k].subtotal : sum),
+    0
+  );
+  const combineActiveCount = Object.values(combineSelection).filter(Boolean).length;
 
   // Field updaters
   const updateClient = (field: keyof Invoice['client'], value: string) => {
@@ -274,7 +332,7 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
           {onPrintPreview && (
             <button
               type="button"
-              onClick={onPrintPreview}
+              onClick={() => onPrintPreview()}
               className="px-2.5 py-1 text-xs font-semibold bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-600/50 rounded flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
               title="Open Print Preview with centered A4 margins"
             >
@@ -310,7 +368,10 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
           }`}
         >
           <Sparkles className="w-3.5 h-3.5" />
-          Package & Addons
+          <span>Packages & Print</span>
+          <span className="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.2 rounded-full font-bold ml-0.5">
+            {pkgSummaries.activeCount}
+          </span>
         </button>
 
         <button
@@ -527,34 +588,864 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
           </div>
         )}
 
-        {/* ================= TAB 2: PACKAGES & ADDONS ================= */}
+        {/* ================= TAB 2: SEPARATE PACKAGES & PRINT HUB ================= */}
         {activeTab === 'packages' && (
           <div className="space-y-6">
+            {/* Header info */}
             <div>
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                Package Tier Selection
+                Separate Invoice Packages & Multi-Print Studio
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Toggle between the standard Univision service packages or specify custom architectural rates.
+                Manage each package independently. Configure tiers, print only ONE package at a time, or combine any two or more into a consolidated invoice.
               </p>
             </div>
 
-            {/* Flyer Portals & Separate Windows Launcher Banner */}
+            {/* 1. MASTER PRINT HUB (DIRECT SINGLE-PACKAGE & COMBINED PRINTING) */}
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-[#0b2341] border border-blue-500/40 rounded-xl p-4 shadow-xl space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-amber-400/10 rounded border border-amber-500/30 text-amber-400">
+                    <Printer className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      Print One Package at a Time (1-Click Standalone)
+                    </span>
+                    <p className="text-[11px] text-slate-400">
+                      Instantly opens Print Preview with that single package isolated, its exact fee, 50% advance deposit, and terms.
+                    </p>
+                  </div>
+                </div>
+
+                {onPrintPreview && (
+                  <button
+                    type="button"
+                    onClick={() => onPrintPreview(PACKAGE_PRESETS.all)}
+                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print All Active Packages ({pkgSummaries.activeCount})</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Direct Standalone Print Preset Buttons */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <button
+                  type="button"
+                  onClick={() => onPrintPreview?.(PACKAGE_PRESETS.architectural)}
+                  className="p-2.5 bg-slate-900/90 hover:bg-blue-950/80 border border-blue-500/40 hover:border-blue-400 rounded-lg text-left transition cursor-pointer group shadow-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-blue-300 group-hover:text-white flex items-center gap-1">
+                      <span>🏛️ Architectural</span>
+                    </span>
+                    <Printer className="w-3 h-3 text-blue-400 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Print Only Architectural ({pkgConfig.architectural.tier.toUpperCase()})
+                  </div>
+                  <div className="text-xs font-mono font-bold text-amber-400 mt-0.5">
+                    {formatCurrency(pkgSummaries.packages.architectural.subtotal, invoice.currency)}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onPrintPreview?.(PACKAGE_PRESETS.structural)}
+                  className="p-2.5 bg-slate-900/90 hover:bg-indigo-950/80 border border-indigo-500/40 hover:border-indigo-400 rounded-lg text-left transition cursor-pointer group shadow-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-300 group-hover:text-white flex items-center gap-1">
+                      <span>🏗️ Structural</span>
+                    </span>
+                    <Printer className="w-3 h-3 text-indigo-400 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Print Only Structural ({pkgConfig.structural.tier.toUpperCase()})
+                  </div>
+                  <div className="text-xs font-mono font-bold text-amber-400 mt-0.5">
+                    {formatCurrency(pkgSummaries.packages.structural.subtotal, invoice.currency)}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onPrintPreview?.(PACKAGE_PRESETS.boq)}
+                  className="p-2.5 bg-slate-900/90 hover:bg-emerald-950/80 border border-emerald-500/40 hover:border-emerald-400 rounded-lg text-left transition cursor-pointer group shadow-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-300 group-hover:text-white flex items-center gap-1">
+                      <span>📊 BOQ Package</span>
+                    </span>
+                    <Printer className="w-3 h-3 text-emerald-400 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Print Only BOQ ({pkgConfig.boq.tier.toUpperCase()})
+                  </div>
+                  <div className="text-xs font-mono font-bold text-amber-400 mt-0.5">
+                    {formatCurrency(pkgSummaries.packages.boq.subtotal, invoice.currency)}
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onPrintPreview?.(PACKAGE_PRESETS.inspection)}
+                  className="p-2.5 bg-slate-900/90 hover:bg-amber-950/80 border border-amber-500/40 hover:border-amber-400 rounded-lg text-left transition cursor-pointer group shadow-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-300 group-hover:text-white flex items-center gap-1">
+                      <span>🔍 Site Inspection</span>
+                    </span>
+                    <Printer className="w-3 h-3 text-amber-400 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    Print Only Site Inspection
+                  </div>
+                  <div className="text-xs font-mono font-bold text-amber-400 mt-0.5">
+                    {formatCurrency(pkgSummaries.packages.inspection.subtotal, invoice.currency)}
+                  </div>
+                </button>
+              </div>
+
+              {/* 2. CUSTOM COMBINATION TOOL (COMBINE ANY TWO OR MORE) */}
+              <div className="bg-slate-950/80 border border-purple-500/30 rounded-lg p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5 uppercase tracking-wide">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-purple-400" />
+                    Combine Any Two or Three Packages to Print
+                  </span>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCombineSelection({
+                          architectural: true,
+                          structural: true,
+                          boq: false,
+                          inspection: false,
+                          addons: false,
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+                    >
+                      Arch + Structural
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCombineSelection({
+                          architectural: true,
+                          structural: false,
+                          boq: true,
+                          inspection: false,
+                          addons: false,
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+                    >
+                      Arch + BOQ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCombineSelection({
+                          architectural: false,
+                          structural: true,
+                          boq: true,
+                          inspection: false,
+                          addons: false,
+                        })
+                      }
+                      className="px-2 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+                    >
+                      Structural + BOQ
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  <label
+                    className={`flex items-start gap-2 p-2 rounded border cursor-pointer transition ${
+                      combineSelection.architectural
+                        ? 'bg-blue-950/60 border-blue-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineSelection.architectural}
+                      onChange={() => handleTogglePackageInCombine('architectural')}
+                      className="mt-0.5 rounded border-slate-700 text-blue-500 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="text-xs font-semibold">🏛️ Arch</div>
+                      <div className="text-[10px] text-slate-400">
+                        {formatCurrency(pkgSummaries.packages.architectural.subtotal, invoice.currency)}
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2 p-2 rounded border cursor-pointer transition ${
+                      combineSelection.structural
+                        ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineSelection.structural}
+                      onChange={() => handleTogglePackageInCombine('structural')}
+                      className="mt-0.5 rounded border-slate-700 text-indigo-500 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <div className="text-xs font-semibold">🏗️ Struct</div>
+                      <div className="text-[10px] text-slate-400">
+                        {formatCurrency(pkgSummaries.packages.structural.subtotal, invoice.currency)}
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2 p-2 rounded border cursor-pointer transition ${
+                      combineSelection.boq
+                        ? 'bg-emerald-950/60 border-emerald-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineSelection.boq}
+                      onChange={() => handleTogglePackageInCombine('boq')}
+                      className="mt-0.5 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <div className="text-xs font-semibold">📊 BOQ</div>
+                      <div className="text-[10px] text-slate-400">
+                        {formatCurrency(pkgSummaries.packages.boq.subtotal, invoice.currency)}
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2 p-2 rounded border cursor-pointer transition ${
+                      combineSelection.inspection
+                        ? 'bg-amber-950/60 border-amber-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineSelection.inspection}
+                      onChange={() => handleTogglePackageInCombine('inspection')}
+                      className="mt-0.5 rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                    />
+                    <div>
+                      <div className="text-xs font-semibold">🔍 Site Insp</div>
+                      <div className="text-[10px] text-slate-400">
+                        {formatCurrency(pkgSummaries.packages.inspection.subtotal, invoice.currency)}
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-start gap-2 p-2 rounded border cursor-pointer transition ${
+                      combineSelection.addons
+                        ? 'bg-purple-950/60 border-purple-500 text-white'
+                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={combineSelection.addons}
+                      onChange={() => handleTogglePackageInCombine('addons')}
+                      className="mt-0.5 rounded border-slate-700 text-purple-500 focus:ring-purple-500"
+                    />
+                    <div>
+                      <div className="text-xs font-semibold">⚡ Add-ons</div>
+                      <div className="text-[10px] text-slate-400">
+                        {formatCurrency(pkgSummaries.packages.addons.subtotal, invoice.currency)}
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] text-slate-300">
+                    Combined ({combineActiveCount} packages):{' '}
+                    <strong className="text-amber-400 font-mono">
+                      {formatCurrency(combineGrandTotal, invoice.currency)}
+                    </strong>
+                  </span>
+
+                  {onPrintPreview && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(combineSelection)}
+                      disabled={combineActiveCount === 0}
+                      className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>Print This Combination</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ================= SEPARATE PACKAGE CARDS ================= */}
+
+            {/* PACKAGE 1: ARCHITECTURAL DRAWING PACKAGE */}
+            <div className="p-4 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3.5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-blue-950/80 border border-blue-500/40 rounded-lg text-blue-400 font-bold">
+                    🏛️
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                        01 Architectural Drawing Package
+                      </h4>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-900/60 text-blue-300 border border-blue-600/40">
+                        {pkgConfig.architectural.tier.toUpperCase()} TIER
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Concept design, floor plans, 3D exterior visualizer, sections & municipal building approval set.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
+                    {formatCurrency(pkgSummaries.packages.architectural.subtotal, invoice.currency)}
+                  </span>
+                  {onPrintPreview && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(PACKAGE_PRESETS.architectural)}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded flex items-center gap-1 transition cursor-pointer"
+                      title="Print only this Architectural package"
+                    >
+                      <Printer className="w-3 h-3" />
+                      <span>Print Only</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Architectural Tier Selector */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div
+                  onClick={() => selectPackage('regular')}
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.architectural.tier === 'regular'
+                      ? 'border-blue-500 bg-blue-950/30 ring-1 ring-blue-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-blue-400">REGULAR PACKAGE</span>
+                    <span className="text-xs font-mono font-bold text-white bg-blue-900/50 px-2 py-0.5 rounded">
+                      {invoice.currency} 75 /{invoice.unit}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Floor plans, elevations, sections, roof plan, door/window schedule & permit PDF.
+                  </p>
+                </div>
+
+                <div
+                  onClick={() => selectPackage('premium')}
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.architectural.tier === 'premium'
+                      ? 'border-amber-500 bg-amber-950/20 ring-1 ring-amber-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-amber-400">PREMIUM PACKAGE</span>
+                    <span className="text-xs font-mono font-bold text-amber-300 bg-amber-900/40 px-2 py-0.5 rounded">
+                      {invoice.currency} 100 /{invoice.unit}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Includes Regular plus 3D walkthrough, joinery, interior design layouts & ceiling plans.
+                  </p>
+                </div>
+              </div>
+
+              {/* Architectural Custom Rate */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 text-xs">
+                <span className="text-slate-300">
+                  Floor Area: <strong className="text-white font-mono">{pkgSummaries.totalArea} {invoice.unit}</strong> (from Floors schedule)
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Rate Override:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={pkgConfig.architectural.rate}
+                    onChange={(e) => {
+                      const r = parseFloat(e.target.value) || 0;
+                      updatePkgConfig((c) => ({
+                        ...c,
+                        architectural: { ...c.architectural, tier: 'custom', rate: r },
+                      }));
+                    }}
+                    className="w-20 px-2 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-amber-300 focus:outline-hidden"
+                  />
+                  <span className="text-slate-400">{invoice.currency}/{invoice.unit}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PACKAGE 2: STRUCTURAL ENGINEERING PACKAGE */}
+            <div className="p-4 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3.5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-indigo-950/80 border border-indigo-500/40 rounded-lg text-indigo-400 font-bold">
+                    🏗️
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                        02 Structural Engineering Package
+                      </h4>
+                      <label className="flex items-center gap-1.5 cursor-pointer ml-1">
+                        <input
+                          type="checkbox"
+                          checked={pkgConfig.structural.enabled}
+                          onChange={() =>
+                            updatePkgConfig((c) => ({
+                              ...c,
+                              structural: { ...c.structural, enabled: !c.structural.enabled },
+                            }))
+                          }
+                          className="rounded border-slate-700 text-indigo-500 focus:ring-indigo-500"
+                        />
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                          pkgConfig.structural.enabled
+                            ? 'bg-indigo-900/60 text-indigo-200 border-indigo-500/40'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
+                          {pkgConfig.structural.enabled ? 'INCLUDED' : 'DISABLED'}
+                        </span>
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Foundation engineering, column/beam schedules, slab design, Bar Bending Schedule (BBS) & calculations.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
+                    {formatCurrency(pkgSummaries.packages.structural.subtotal, invoice.currency)}
+                  </span>
+                  {onPrintPreview && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(PACKAGE_PRESETS.structural)}
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded flex items-center gap-1 transition cursor-pointer"
+                      title="Print only this Structural package"
+                    >
+                      <Printer className="w-3 h-3" />
+                      <span>Print Only</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Structural Tiers */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div
+                  onClick={() =>
+                    updatePkgConfig((c) => ({
+                      ...c,
+                      structural: { ...c.structural, enabled: true, tier: 'regular', rate: 65 },
+                    }))
+                  }
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.structural.tier === 'regular'
+                      ? 'border-indigo-500 bg-indigo-950/30 ring-1 ring-indigo-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-indigo-400">REGULAR STRUCTURAL</span>
+                    <span className="text-xs font-mono font-bold text-white bg-indigo-900/50 px-2 py-0.5 rounded">
+                      {invoice.currency} 65 /{invoice.unit}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Foundation design, column layout, beam layout, slab layout, roof structure & structural notes.
+                  </p>
+                </div>
+
+                <div
+                  onClick={() =>
+                    updatePkgConfig((c) => ({
+                      ...c,
+                      structural: { ...c.structural, enabled: true, tier: 'premium', rate: 85 },
+                    }))
+                  }
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.structural.tier === 'premium'
+                      ? 'border-emerald-500 bg-emerald-950/20 ring-1 ring-emerald-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-emerald-400">PREMIUM STRUCTURAL</span>
+                    <span className="text-xs font-mono font-bold text-emerald-300 bg-emerald-900/40 px-2 py-0.5 rounded">
+                      {invoice.currency} 85 /{invoice.unit}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Includes Regular plus Bar Bending Schedule (BBS), structural calculations report & stair reinforcement.
+                  </p>
+                </div>
+              </div>
+
+              {/* Structural Scope Area & Rate Override */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Structural Scope Area:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={pkgConfig.structural.area ?? pkgSummaries.totalArea}
+                    onChange={(e) => {
+                      const a = parseFloat(e.target.value) || 0;
+                      updatePkgConfig((c) => ({
+                        ...c,
+                        structural: { ...c.structural, area: a },
+                      }));
+                    }}
+                    className="w-20 px-2 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-indigo-300 focus:outline-hidden"
+                  />
+                  <span className="text-slate-400">{invoice.unit}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Rate:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={pkgConfig.structural.rate}
+                    onChange={(e) => {
+                      const r = parseFloat(e.target.value) || 0;
+                      updatePkgConfig((c) => ({
+                        ...c,
+                        structural: { ...c.structural, tier: 'custom', rate: r },
+                      }));
+                    }}
+                    className="w-20 px-2 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-amber-300 focus:outline-hidden"
+                  />
+                  <span className="text-slate-400">{invoice.currency}/{invoice.unit}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PACKAGE 3: BILLS OF QUANTITIES (BOQ) PACKAGE */}
+            <div className="p-4 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3.5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-emerald-950/80 border border-emerald-500/40 rounded-lg text-emerald-400 font-bold">
+                    📊
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                        03 Bills of Quantities (BOQ) Package
+                      </h4>
+                      <label className="flex items-center gap-1.5 cursor-pointer ml-1">
+                        <input
+                          type="checkbox"
+                          checked={pkgConfig.boq.enabled}
+                          onChange={() =>
+                            updatePkgConfig((c) => ({
+                              ...c,
+                              boq: { ...c.boq, enabled: !c.boq.enabled },
+                            }))
+                          }
+                          className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-500"
+                        />
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                          pkgConfig.boq.enabled
+                            ? 'bg-emerald-900/60 text-emerald-200 border-emerald-500/40'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
+                          {pkgConfig.boq.enabled ? 'INCLUDED' : 'DISABLED'}
+                        </span>
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Material takeoff, labor cost breakdown, trade pricing, cashflow & tender documentation.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
+                    {formatCurrency(pkgSummaries.packages.boq.subtotal, invoice.currency)}
+                  </span>
+                  {onPrintPreview && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(PACKAGE_PRESETS.boq)}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded flex items-center gap-1 transition cursor-pointer"
+                      title="Print only this BOQ package"
+                    >
+                      <Printer className="w-3 h-3" />
+                      <span>Print Only</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* BOQ Tiers */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div
+                  onClick={() => {
+                    const fee = getBOQPackageFee(pkgSummaries.totalArea, 'regular');
+                    updatePkgConfig((c) => ({
+                      ...c,
+                      boq: { ...c.boq, enabled: true, tier: 'regular', fee },
+                    }));
+                  }}
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.boq.tier === 'regular'
+                      ? 'border-blue-500 bg-blue-950/30 ring-1 ring-blue-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-blue-400">REGULAR BOQ</span>
+                    <span className="text-xs font-mono font-bold text-white bg-blue-900/50 px-2 py-0.5 rounded">
+                      GMD 18k – 25k
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Quantity takeoff, material & labor summary, detailed trade BOQ & report.
+                  </p>
+                </div>
+
+                <div
+                  onClick={() => {
+                    const fee = getBOQPackageFee(pkgSummaries.totalArea, 'premium');
+                    updatePkgConfig((c) => ({
+                      ...c,
+                      boq: { ...c.boq, enabled: true, tier: 'premium', fee },
+                    }));
+                  }}
+                  className={`p-3 rounded-lg border cursor-pointer transition ${
+                    pkgConfig.boq.tier === 'premium'
+                      ? 'border-emerald-500 bg-emerald-950/20 ring-1 ring-emerald-500/50'
+                      : 'border-slate-800 bg-slate-900 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-emerald-400">PREMIUM BOQ</span>
+                    <span className="text-xs font-mono font-bold text-emerald-300 bg-emerald-900/40 px-2 py-0.5 rounded">
+                      GMD 30k – 65k
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Comprehensive quantity surveying, procurement schedule, tender docs & quality control.
+                  </p>
+                </div>
+              </div>
+
+              {/* BOQ Fee Input */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 text-xs">
+                <span className="text-slate-400">
+                  Tier Bracket: 100-500 m² (18k/30k) • 500-1,000 m² (20k/45k) • 1,000+ m² (25k/65k)
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Agreed Fee:</span>
+                  <input
+                    type="number"
+                    min="1000"
+                    step="500"
+                    value={pkgConfig.boq.fee}
+                    onChange={(e) => {
+                      const f = parseFloat(e.target.value) || 0;
+                      updatePkgConfig((c) => ({
+                        ...c,
+                        boq: { ...c.boq, tier: 'custom', fee: f },
+                      }));
+                    }}
+                    className="w-28 px-2 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-amber-300 focus:outline-hidden"
+                  />
+                  <span className="text-slate-400">{invoice.currency}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PACKAGE 4: SITE INSPECTION & REPORTS PACKAGE */}
+            <div className="p-4 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3.5 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-amber-950/80 border border-amber-500/40 rounded-lg text-amber-400 font-bold">
+                    🔍
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                        04 Site Inspection & Reports Package
+                      </h4>
+                      <label className="flex items-center gap-1.5 cursor-pointer ml-1">
+                        <input
+                          type="checkbox"
+                          checked={pkgConfig.inspection.enabled}
+                          onChange={() =>
+                            updatePkgConfig((c) => ({
+                              ...c,
+                              inspection: { ...c.inspection, enabled: !c.inspection.enabled },
+                            }))
+                          }
+                          className="rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                        />
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                          pkgConfig.inspection.enabled
+                            ? 'bg-amber-900/60 text-amber-200 border-amber-500/40'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
+                          {pkgConfig.inspection.enabled ? 'INCLUDED' : 'DISABLED'}
+                        </span>
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      On-site inspection, boundary & terrain sketch plans, professional consultation & certified report.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-amber-400 bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
+                    {formatCurrency(pkgSummaries.packages.inspection.subtotal, invoice.currency)}
+                  </span>
+                  {onPrintPreview && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(PACKAGE_PRESETS.inspection)}
+                      className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded flex items-center gap-1 transition cursor-pointer"
+                      title="Print only this Site Inspection package"
+                    >
+                      <Printer className="w-3 h-3" />
+                      <span>Print Only</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Inspection Fee input */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 text-xs">
+                <span className="text-slate-300">
+                  Official Standard Flyer Rate: <strong>GMD 3,500 Fixed</strong>
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">Inspection Fee:</span>
+                  <input
+                    type="number"
+                    min="500"
+                    step="500"
+                    value={pkgConfig.inspection.fee}
+                    onChange={(e) => {
+                      const f = parseFloat(e.target.value) || 0;
+                      updatePkgConfig((c) => ({
+                        ...c,
+                        inspection: { ...c.inspection, fee: f },
+                      }));
+                    }}
+                    className="w-24 px-2 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-amber-300 focus:outline-hidden"
+                  />
+                  <span className="text-slate-400">{invoice.currency}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* PACKAGE 5: ADDITIONAL DELIVERABLES & ADD-ONS */}
+            <div className="p-4 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3.5 shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Additional Engineering & Architectural Deliverables
+                  </h4>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    +{formatCurrency(pkgSummaries.packages.addons.subtotal, invoice.currency)}
+                  </span>
+                  {onPrintPreview && pkgSummaries.packages.addons.subtotal > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onPrintPreview(PACKAGE_PRESETS.addons)}
+                      className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded flex items-center gap-1 transition cursor-pointer"
+                    >
+                      <Printer className="w-3 h-3" />
+                      <span>Print Addons</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {ARCHITECTURAL_ADDONS_PRESETS.map((addon) => {
+                  const isEnabled = invoice.addons.some((a) => a.id === addon.id && a.enabled);
+                  return (
+                    <label
+                      key={addon.id}
+                      className={`flex items-start justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
+                        isEnabled
+                          ? 'border-amber-500/60 bg-amber-950/20'
+                          : 'border-slate-800 bg-slate-900/60 hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="checkbox"
+                          checked={isEnabled}
+                          onChange={() => toggleAddon(addon.id)}
+                          className="mt-0.5 rounded border-slate-700 text-amber-500 focus:ring-amber-500"
+                        />
+                        <div>
+                          <div className="text-xs font-semibold text-white">{addon.name}</div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">{addon.description}</div>
+                        </div>
+                      </div>
+                      <div className="text-xs font-mono font-bold text-slate-200 shrink-0 ml-3">
+                        {formatCurrency(addon.amount, invoice.currency)}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Flyer Portals Launcher */}
             <div className="bg-gradient-to-r from-slate-900 to-[#0b2341] border border-blue-500/40 rounded-xl p-4 shadow-lg space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Building2 className="w-4 h-4 text-amber-400" />
                   <span className="text-xs font-bold text-white uppercase tracking-wider">
-                    Official Flyer Portals (Separate Windows / Tabs)
+                    Official Flyer Portals (Interactive Calculators)
                   </span>
                 </div>
                 <span className="text-[10px] bg-blue-500/20 text-blue-300 font-semibold px-2 py-0.5 rounded border border-blue-400/30">
-                  REF: FLYER PACKAGES
+                  SEPARATE PORTALS
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                Launch independent calculation modules for Structural Drawing (GMD 65/85 m²), Bills of Quantities (GMD 18k - 65k), or the full pricing matrix.
+                Launch full-page standalone portals with live matrixes, rate tables, and official specifications.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                 {onOpenArchitecturalPortal && (
@@ -593,243 +1484,10 @@ export const InvoiceEditor: React.FC<InvoiceEditorProps> = ({
                     onClick={onOpenPackagesPortal}
                     className="flex items-center justify-between px-3 py-2 bg-amber-900/60 hover:bg-amber-800/80 border border-amber-500/50 rounded-lg text-xs font-semibold text-amber-200 transition shadow-sm cursor-pointer"
                   >
-                    <span>🏷️ Packages</span>
+                    <span>🏷️ Packages Hub</span>
                     <ExternalLink className="w-3.5 h-3.5" />
                   </button>
                 )}
-              </div>
-
-              {/* BOQ Service Scope Reference (Regular vs Premium) */}
-              <div className="pt-2 border-t border-slate-800 text-[11px]">
-                <details className="group cursor-pointer">
-                  <summary className="text-emerald-400 hover:text-emerald-300 font-semibold flex items-center justify-between select-none py-0.5">
-                    <span className="flex items-center gap-1.5">
-                      <span>📊 BOQ Service Packages Specification (Regular vs Premium)</span>
-                    </span>
-                    <span className="text-[10px] text-slate-400 group-open:rotate-180 transition-transform">▼</span>
-                  </summary>
-                  <div className="mt-2.5 grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
-                    <div className="bg-slate-950/70 p-2.5 rounded-lg border border-slate-800">
-                      <div className="font-bold text-blue-400 text-xs mb-1.5 flex items-center justify-between">
-                        <span>REGULAR BOQ PACKAGE</span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-400 font-normal">GMD 18,000 – 25,000</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setServicesModalCategory('boq');
-                            }}
-                            className="text-[9px] text-blue-400 hover:underline flex items-center gap-0.5"
-                          >
-                            <Edit3 className="w-2.5 h-2.5" /> edit
-                          </button>
-                        </div>
-                      </div>
-                      <div className="text-[10px] text-blue-400 font-semibold mb-1">
-                        INCLUDES:
-                      </div>
-                      <div className="space-y-1 text-[11px] text-slate-300">
-                        {regularServices.map((feat, i) => (
-                          <div key={i} className="flex items-start gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-blue-400 shrink-0 mt-0.5" />
-                            <span>{feat}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="bg-emerald-950/30 p-2.5 rounded-lg border border-emerald-800/50">
-                      <div className="font-bold text-emerald-400 text-xs mb-1.5 flex items-center justify-between">
-                        <span>PREMIUM BOQ PACKAGE</span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-emerald-300 font-normal">GMD 30,000 – 65,000</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setServicesModalCategory('boq');
-                            }}
-                            className="text-[9px] text-emerald-300 hover:underline flex items-center gap-0.5"
-                          >
-                            <Edit3 className="w-2.5 h-2.5" /> edit
-                          </button>
-                        </div>
-                      </div>
-                      <div className="text-[10px] text-emerald-300 font-semibold mb-1">
-                        EVERYTHING IN REGULAR PLUS:
-                      </div>
-                      <div className="space-y-1 text-[11px] text-emerald-100">
-                        {premiumExtraServices.map((feat, i) => (
-                          <div key={i} className="flex items-start gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
-                            <span>{feat}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </div>
-            </div>
-
-            {/* Tier Selector Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Regular Tier */}
-              <div
-                onClick={() => selectPackage('regular')}
-                className={`p-4 rounded-xl border cursor-pointer transition-all ${
-                  invoice.packageType === 'regular'
-                    ? 'border-blue-500 bg-blue-950/30 ring-1 ring-blue-500/50'
-                    : 'border-slate-800 bg-slate-850 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-black tracking-wider uppercase text-blue-400">
-                    REGULAR PACKAGE
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setServicesModalCategory('architectural');
-                      }}
-                      className="text-[10px] text-blue-400 hover:text-blue-300 underline flex items-center gap-0.5"
-                    >
-                      <Edit3 className="w-2.5 h-2.5" /> Edit List
-                    </button>
-                    <span className="text-xs font-mono font-bold text-white bg-blue-900/60 px-2 py-0.5 rounded border border-blue-700/50">
-                      {invoice.currency} 75 /{invoice.unit}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-slate-300 mb-3">
-                  {PACKAGES.regular.description}
-                </p>
-                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                  {archReg.map((item, idx) => (
-                    <div key={idx} className="flex items-center gap-1.5 text-[11px] text-slate-300">
-                      <CheckCircle2 className="w-3 h-3 text-blue-400 shrink-0" />
-                      <span>{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Premium Tier */}
-              <div
-                onClick={() => selectPackage('premium')}
-                className={`p-4 rounded-xl border cursor-pointer transition-all ${
-                  invoice.packageType === 'premium'
-                    ? 'border-amber-500 bg-amber-950/20 ring-1 ring-amber-500/50'
-                    : 'border-slate-800 bg-slate-850 hover:border-slate-700'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-black tracking-wider uppercase text-amber-400">
-                    PREMIUM PACKAGE
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setServicesModalCategory('architectural');
-                      }}
-                      className="text-[10px] text-amber-400 hover:text-amber-300 underline flex items-center gap-0.5"
-                    >
-                      <Edit3 className="w-2.5 h-2.5" /> Edit List
-                    </button>
-                    <span className="text-xs font-mono font-bold text-amber-300 bg-amber-900/40 px-2 py-0.5 rounded border border-amber-600/50">
-                      {invoice.currency} 100 /{invoice.unit}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-slate-300 mb-3">
-                  {PACKAGES.premium.description}
-                </p>
-                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                  {archPremAll.map((item, idx) => (
-                    <div key={idx} className="flex items-center gap-1.5 text-[11px] text-amber-200/90">
-                      <CheckCircle2 className="w-3 h-3 text-amber-400 shrink-0" />
-                      <span>{item}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Custom Rate Override Option */}
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
-              <div>
-                <span className="text-xs font-semibold text-white">Custom Package Rate</span>
-                <p className="text-[11px] text-slate-400">
-                  Override default 75 / 100 rate with negotiated client pricing.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min="1"
-                  value={invoice.packageRate}
-                  onChange={(e) =>
-                    onChange({
-                      ...invoice,
-                      packageType: 'custom',
-                      packageRate: parseFloat(e.target.value) || 0,
-                    })
-                  }
-                  className="w-24 px-2.5 py-1 text-xs font-mono text-right bg-slate-800 border border-slate-700 rounded text-amber-300 focus:outline-hidden focus:border-amber-500"
-                />
-                <span className="text-xs text-slate-400">
-                  {invoice.currency}/{invoice.unit}
-                </span>
-              </div>
-            </div>
-
-            {/* Architectural Add-on Services */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Additional Engineering & Architectural Deliverables
-                </h4>
-                <span className="text-[11px] text-amber-400 font-mono">
-                  +{formatCurrency(calculations.addonsTotal, invoice.currency)}
-                </span>
-              </div>
-
-              <div className="space-y-2">
-                {ARCHITECTURAL_ADDONS_PRESETS.map((addon) => {
-                  const isEnabled = invoice.addons.some((a) => a.id === addon.id && a.enabled);
-                  return (
-                    <label
-                      key={addon.id}
-                      className={`flex items-start justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
-                        isEnabled
-                          ? 'border-amber-500/60 bg-amber-950/20'
-                          : 'border-slate-800 bg-slate-800/40 hover:bg-slate-800/70'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <input
-                          type="checkbox"
-                          checked={isEnabled}
-                          onChange={() => toggleAddon(addon.id)}
-                          className="mt-0.5 rounded border-slate-700 text-amber-500 focus:ring-amber-500"
-                        />
-                        <div>
-                          <div className="text-xs font-semibold text-white">{addon.name}</div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">{addon.description}</div>
-                        </div>
-                      </div>
-                      <div className="text-xs font-mono font-bold text-slate-200 shrink-0 ml-3">
-                        {formatCurrency(addon.amount, invoice.currency)}
-                      </div>
-                    </label>
-                  );
-                })}
               </div>
             </div>
           </div>

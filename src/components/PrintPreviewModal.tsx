@@ -10,22 +10,33 @@ import {
   Loader2,
   FileCode,
   MoveHorizontal,
+  Sparkles,
+  SlidersHorizontal,
+  Layers,
 } from 'lucide-react';
-import { Invoice } from '../types';
+import { Invoice, PackageSelectionMap, PackageFilterPreset } from '../types';
 import { InvoicePaper } from './InvoicePaper';
 import { downloadInvoicePDF, downloadPrintableHTML } from '../utils/pdfExport';
 import { printInvoiceElement } from '../utils/printHelper';
+import {
+  PACKAGE_PRESETS,
+  filterInvoiceForPackages,
+  getPackageSummaries,
+} from '../utils/packageManager';
+import { formatCurrency, calculateInvoice } from '../utils/calculations';
 
 interface PrintPreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
   invoice: Invoice;
+  initialPackageFilter?: PackageSelectionMap;
 }
 
 export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   isOpen,
   onClose,
   invoice,
+  initialPackageFilter,
 }) => {
   const [scale, setScale] = useState<number>(0.65);
   const [fitMode, setFitMode] = useState<'page' | 'width' | 'custom'>('page');
@@ -35,6 +46,44 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [statusMessage, setStatusMessage] = useState('');
   const [showMargins, setShowMargins] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
+
+  // Package Filter State for single-package and custom multi-package printing
+  const [packageFilter, setPackageFilter] = useState<PackageSelectionMap>(() => {
+    if (initialPackageFilter) return initialPackageFilter;
+    if (invoice.activePrintFilter) return invoice.activePrintFilter;
+    return PACKAGE_PRESETS.all;
+  });
+  const [activePreset, setActivePreset] = useState<PackageFilterPreset>(() => {
+    if (initialPackageFilter) return 'custom';
+    return 'all';
+  });
+  const [showCustomCombine, setShowCustomCombine] = useState(false);
+
+  // Derived filtered invoice & package stats
+  const { packages: allPkgSummaries, activeCount, grandTotal } = getPackageSummaries(invoice);
+  const { filteredInvoice, bannerTitle, selectedNames, isSinglePackage, singlePackageKey } =
+    filterInvoiceForPackages(invoice, packageFilter);
+  const currentCalculations = calculateInvoice(filteredInvoice);
+
+  const handleSelectPreset = (preset: PackageFilterPreset) => {
+    setActivePreset(preset);
+    if (preset !== 'custom') {
+      setPackageFilter({ ...PACKAGE_PRESETS[preset] });
+    }
+  };
+
+  const handleTogglePackage = (pkgKey: keyof PackageSelectionMap) => {
+    setActivePreset('custom');
+    setPackageFilter((prev) => {
+      const updated = { ...prev, [pkgKey]: !prev[pkgKey] };
+      // Prevent all from being deselected
+      const anySelected = Object.values(updated).some(Boolean);
+      if (!anySelected) {
+        return prev;
+      }
+      return updated;
+    });
+  };
 
   // Auto-calculate scale to fit the entire A4 page or width
   const updateFitScale = useCallback((mode: 'page' | 'width') => {
@@ -87,8 +136,11 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     setIsGeneratingPDF(true);
     setStatusMessage('Compiling centered A4 PDF...');
 
-    const success = await downloadInvoicePDF(invoice, {
-      filename: `${invoice.invoiceNumber}_Univision_Invoice.pdf`,
+    const cleanNames = selectedNames.map((s) => s.replace(/[^a-zA-Z0-9]/g, '_')).join('_');
+    const filename = `${invoice.invoiceNumber}_${cleanNames || 'Invoice'}.pdf`;
+
+    const success = await downloadInvoicePDF(filteredInvoice, {
+      filename,
       onProgress: (msg) => setStatusMessage(msg),
     });
 
@@ -118,11 +170,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     }, 200);
 
     // 3. Immediately compile and download high-resolution centered A4 PDF
-    // to guarantee the user has the exact printable document ready in any browser environment
     try {
       setStatusMessage('Saving centered A4 PDF print file...');
-      const success = await downloadInvoicePDF(invoice, {
-        filename: `${invoice.invoiceNumber}_Univision_Invoice.pdf`,
+      const cleanNames = selectedNames.map((s) => s.replace(/[^a-zA-Z0-9]/g, '_')).join('_');
+      const filename = `${invoice.invoiceNumber}_${cleanNames || 'Invoice'}.pdf`;
+
+      const success = await downloadInvoicePDF(filteredInvoice, {
+        filename,
         onProgress: (msg) => setStatusMessage(msg),
       });
 
@@ -144,7 +198,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   };
 
   const handleDownloadHTML = () => {
-    downloadPrintableHTML(invoice);
+    downloadPrintableHTML(filteredInvoice);
     setStatusMessage('Standalone HTML downloaded!');
     setTimeout(() => setStatusMessage(''), 3000);
   };
@@ -346,6 +400,268 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
         </div>
       </header>
 
+      {/* 
+        =======================================================================
+        PACKAGE PRINT SELECTOR & COMBINATION BAR
+        Allows printing only one package at a time or combining any selection
+        =======================================================================
+      */}
+      <div className="bg-slate-900/95 border-b border-slate-800 px-4 md:px-6 py-2 flex flex-wrap items-center justify-between gap-2.5 shrink-0 z-20 shadow-md">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
+            <Sparkles className="w-3.5 h-3.5" />
+            Print Package:
+          </span>
+
+          {/* Preset: All Included Packages */}
+          <button
+            type="button"
+            onClick={() => handleSelectPreset('all')}
+            className={`px-3 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activePreset === 'all'
+                ? 'bg-amber-400 text-slate-950 font-bold shadow-xs ring-1 ring-amber-300'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <span>🌟 All Included ({activeCount})</span>
+          </button>
+
+          {/* Preset: Architectural Only */}
+          <button
+            type="button"
+            onClick={() => handleSelectPreset('architectural')}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+              activePreset === 'architectural'
+                ? 'bg-blue-600 text-white font-bold shadow-xs ring-1 ring-blue-400'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <span>🏛️ Arch Only</span>
+          </button>
+
+          {/* Preset: Structural Only */}
+          <button
+            type="button"
+            onClick={() => handleSelectPreset('structural')}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+              activePreset === 'structural'
+                ? 'bg-indigo-600 text-white font-bold shadow-xs ring-1 ring-indigo-400'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <span>🏗️ Structural Only</span>
+          </button>
+
+          {/* Preset: BOQ Only */}
+          <button
+            type="button"
+            onClick={() => handleSelectPreset('boq')}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+              activePreset === 'boq'
+                ? 'bg-emerald-600 text-white font-bold shadow-xs ring-1 ring-emerald-400'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <span>📊 BOQ Only</span>
+          </button>
+
+          {/* Preset: Site Inspection Only */}
+          <button
+            type="button"
+            onClick={() => handleSelectPreset('inspection')}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer ${
+              activePreset === 'inspection'
+                ? 'bg-amber-600 text-white font-bold shadow-xs ring-1 ring-amber-400'
+                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white'
+            }`}
+          >
+            <span>🔍 Inspection Only</span>
+          </button>
+
+          {/* Combine / Multi-Select Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowCustomCombine((prev) => !prev)}
+            className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+              showCustomCombine || activePreset === 'custom' || activePreset === 'arch_structural' || activePreset === 'arch_boq' || activePreset === 'structural_boq'
+                ? 'bg-purple-900/70 border-purple-400 text-purple-200 ring-1 ring-purple-400/50'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+            }`}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-purple-400" />
+            <span>Combine Packages... {showCustomCombine ? '▲' : '▼'}</span>
+          </button>
+        </div>
+
+        {/* Live Filter Summary Badge */}
+        <div className="flex items-center gap-2">
+          <div className="text-[11px] text-slate-300 hidden sm:flex items-center gap-1.5">
+            <span className="text-slate-400">Target Print:</span>
+            <span className="font-semibold text-white">{selectedNames.join(' + ') || 'Selected Scope'}</span>
+          </div>
+          <div className="flex items-center gap-1 px-2.5 py-0.5 rounded bg-slate-950 border border-slate-800 text-[11px]">
+            <span className="text-slate-400 font-mono">Total:</span>
+            <span className="font-mono font-bold text-amber-400">
+              {formatCurrency(currentCalculations.grandTotal, invoice.currency)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Expandable Custom Combination Panel */}
+      {showCustomCombine && (
+        <div className="bg-slate-900 border-b border-purple-500/40 px-4 md:px-6 py-3 shrink-0 z-20 shadow-xl space-y-2.5 animate-fade-in">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5 uppercase tracking-wide">
+              <Layers className="w-4 h-4 text-purple-400" />
+              Custom Package Combination (Select Any Two or More to Print Together)
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSelectPreset('arch_structural')}
+                className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+              >
+                Arch + Structural
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPreset('arch_boq')}
+                className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+              >
+                Arch + BOQ
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPreset('structural_boq')}
+                className="px-2 py-0.5 text-[11px] bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
+              >
+                Structural + BOQ
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPreset('all')}
+                className="px-2 py-0.5 text-[11px] bg-amber-400/20 hover:bg-amber-400/30 text-amber-300 border border-amber-500/40 rounded cursor-pointer font-semibold"
+              >
+                All Packages
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
+            {/* Arch Checkbox */}
+            <label
+              className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                packageFilter.architectural
+                  ? 'bg-blue-950/60 border-blue-500 text-white'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={packageFilter.architectural}
+                onChange={() => handleTogglePackage('architectural')}
+                className="mt-0.5 rounded border-slate-600 text-blue-600 focus:ring-blue-500"
+              />
+              <div>
+                <div className="text-xs font-bold leading-tight">🏛️ Architectural</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {formatCurrency(allPkgSummaries.architectural.subtotal, invoice.currency)}
+                </div>
+              </div>
+            </label>
+
+            {/* Structural Checkbox */}
+            <label
+              className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                packageFilter.structural
+                  ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={packageFilter.structural}
+                onChange={() => handleTogglePackage('structural')}
+                className="mt-0.5 rounded border-slate-600 text-indigo-600 focus:ring-indigo-500"
+              />
+              <div>
+                <div className="text-xs font-bold leading-tight">🏗️ Structural</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {formatCurrency(allPkgSummaries.structural.subtotal, invoice.currency)}
+                </div>
+              </div>
+            </label>
+
+            {/* BOQ Checkbox */}
+            <label
+              className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                packageFilter.boq
+                  ? 'bg-emerald-950/60 border-emerald-500 text-white'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={packageFilter.boq}
+                onChange={() => handleTogglePackage('boq')}
+                className="mt-0.5 rounded border-slate-600 text-emerald-600 focus:ring-emerald-500"
+              />
+              <div>
+                <div className="text-xs font-bold leading-tight">📊 BOQ Package</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {formatCurrency(allPkgSummaries.boq.subtotal, invoice.currency)}
+                </div>
+              </div>
+            </label>
+
+            {/* Inspection Checkbox */}
+            <label
+              className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                packageFilter.inspection
+                  ? 'bg-amber-950/60 border-amber-500 text-white'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={packageFilter.inspection}
+                onChange={() => handleTogglePackage('inspection')}
+                className="mt-0.5 rounded border-slate-600 text-amber-500 focus:ring-amber-500"
+              />
+              <div>
+                <div className="text-xs font-bold leading-tight">🔍 Site Inspection</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {formatCurrency(allPkgSummaries.inspection.subtotal, invoice.currency)}
+                </div>
+              </div>
+            </label>
+
+            {/* Addons Checkbox */}
+            <label
+              className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                packageFilter.addons
+                  ? 'bg-purple-950/60 border-purple-500 text-white'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={packageFilter.addons}
+                onChange={() => handleTogglePackage('addons')}
+                className="mt-0.5 rounded border-slate-600 text-purple-600 focus:ring-purple-500"
+              />
+              <div>
+                <div className="text-xs font-bold leading-tight">⚡ Extra Add-ons</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">
+                  {formatCurrency(allPkgSummaries.addons.subtotal, invoice.currency)}
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+      )}
+
       {/* Print Notice Banner */}
       {printNotice && (
         <div className="bg-emerald-950/95 border-b border-emerald-500/50 px-4 md:px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-200 shrink-0 shadow-md">
@@ -417,7 +733,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <div className="w-full flex justify-center h-full">
               <InvoicePaper
                 id="univision-invoice-preview-sheet"
-                invoice={invoice}
+                invoice={filteredInvoice}
+                packageFilter={packageFilter}
                 isInteractive={false}
                 className="shadow-none border-0"
               />
